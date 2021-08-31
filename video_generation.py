@@ -57,14 +57,14 @@ class VideoGenerator:
             else:
                 # If input path exists
                 if os.path.exists(self.args.input_path):
+                    frames_folder = os.path.join(self.args.output_path, "frames")
+                    os.makedirs(frames_folder, exist_ok=True)
                     # If input is a video file
                     if os.path.isfile(self.args.input_path):
-                        frames_folder = os.path.join(self.args.output_path, "frames")
                         attention_folder = os.path.join(
                             self.args.output_path, "attention"
                         )
 
-                        os.makedirs(frames_folder, exist_ok=True)
                         os.makedirs(attention_folder, exist_ok=True)
 
                         self._extract_frames_from_video(
@@ -79,7 +79,12 @@ class VideoGenerator:
                         self._generate_video_from_images(
                             attention_folder, self.args.output_path
                         )
-
+                        self._generate_video_from_images(
+                            frames_folder,
+                            self.args.output_path,
+                            file_pattern="reshaped-*.jpg",
+                            out_video_name="original-reshaped"
+                        )
                     # If input is a folder of already extracted frames
                     if os.path.isdir(self.args.input_path):
                         attention_folder = os.path.join(
@@ -93,7 +98,12 @@ class VideoGenerator:
                         self._generate_video_from_images(
                             attention_folder, self.args.output_path
                         )
-
+                        self._generate_video_from_images(
+                            frames_folder,
+                            self.args.output_path,
+                            file_pattern="reshaped-*.jpg",
+                            out_video_name="original-reshaped"
+                        )
                 # If input path doesn't exists
                 else:
                     print(f"Provided input path {self.args.input_path} doesn't exists.")
@@ -116,9 +126,9 @@ class VideoGenerator:
             success, image = vidcap.read()
             count += 1
 
-    def _generate_video_from_images(self, inp: str, out: str):
+    def _generate_video_from_images(self, inp: str, out: str, file_pattern="attn-*.jpg", out_video_name="video"):
         img_array = []
-        attention_images_list = sorted(glob.glob(os.path.join(inp, "attn-*.jpg")))
+        attention_images_list = sorted(glob.glob(os.path.join(inp, file_pattern)))
 
         # Get size of the first image
         with open(attention_images_list[0], "rb") as f:
@@ -136,7 +146,7 @@ class VideoGenerator:
                 img_array.append(cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR))
 
         out = cv2.VideoWriter(
-            os.path.join(out, "video." + self.args.video_format),
+            os.path.join(out, f"{out_video_name}." + self.args.video_format),
             FOURCC[self.args.video_format],
             self.args.fps,
             size,
@@ -152,8 +162,8 @@ class VideoGenerator:
 
         for img_path in tqdm(sorted(glob.glob(os.path.join(inp, "*.jpg")))):
             with open(img_path, "rb") as f:
-                img = Image.open(f)
-                img = img.convert("RGB")
+                img_in = Image.open(f)
+                img_in = img_in.convert("RGB")
 
             if self.args.resize is not None:
                 transform = pth_transforms.Compose(
@@ -175,7 +185,7 @@ class VideoGenerator:
                     ]
                 )
 
-            img = transform(img)
+            img = transform(img_in)
 
             # make the image divisible by the patch size
             w, h = (
@@ -183,12 +193,10 @@ class VideoGenerator:
                 img.shape[2] - img.shape[2] % self.args.patch_size,
             )
             img = img[:, :w, :h].unsqueeze(0)
-
             w_featmap = img.shape[-2] // self.args.patch_size
             h_featmap = img.shape[-1] // self.args.patch_size
 
             attentions = self.model.get_last_selfattention(img.to(DEVICE))
-
             nh = attentions.shape[1]  # number of head
 
             # we keep only the output patch attention
@@ -236,6 +244,9 @@ class VideoGenerator:
                 cmap="inferno",
                 format="jpg",
             )
+            fname = os.path.join(os.path.dirname(out), "frames/reshaped-" + os.path.basename(img_path))
+            img_in = img_in.resize((attentions[0].shape[1], attentions[0].shape[0]))
+            img_in.save(fname)
 
     def __load_model(self):
         # build model
@@ -375,4 +386,3 @@ if __name__ == "__main__":
     args = parse_args()
 
     vg = VideoGenerator(args)
-    vg.run()
